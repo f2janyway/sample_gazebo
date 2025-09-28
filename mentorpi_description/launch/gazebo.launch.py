@@ -1,0 +1,144 @@
+#!/usr/bin/env python3
+
+import os
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, ExecuteProcess
+from launch.conditions import IfCondition
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration, Command, PathJoinSubstitution
+from launch_ros.actions import Node
+from launch_ros.substitutions import FindPackageShare
+from launch_ros.parameter_descriptions import ParameterValue
+from ament_index_python.packages import get_package_share_directory
+
+
+def generate_launch_description():
+    # Get the package directory
+    pkg_mentorpi_description = get_package_share_directory('mentorpi_description')
+    
+    # Paths to important files
+    default_model_path = os.path.join(pkg_mentorpi_description, 'urdf', 'robot.urdf.xacro')
+    default_rviz_config_path = os.path.join(pkg_mentorpi_description, 'rviz', 'mentorpi.rviz')
+    world_path = os.path.join(pkg_mentorpi_description, 'worlds', 'mentorpi_world.world')
+    
+    # Declare launch arguments
+    declare_model_path_cmd = DeclareLaunchArgument(
+        name='model_path',
+        default_value=default_model_path,
+        description='Absolute path to robot urdf file'
+    )
+    
+    declare_rviz_config_file_cmd = DeclareLaunchArgument(
+        name='rviz_config_file',
+        default_value=default_rviz_config_path,
+        description='Full path to the RVIZ config file to use'
+    )
+    
+    declare_use_sim_time_cmd = DeclareLaunchArgument(
+        name='use_sim_time',
+        default_value='true',
+        description='Use simulation (Gazebo) clock if true'
+    )
+    
+    declare_use_rviz_cmd = DeclareLaunchArgument(
+        name='use_rviz',
+        default_value='true',
+        description='Whether to start RVIZ'
+    )
+    
+    declare_world_cmd = DeclareLaunchArgument(
+        name='world',
+        default_value=world_path,
+        description='Full path to world file to load'
+    )
+
+    # Launch configuration variables
+    model_path = LaunchConfiguration('model_path')
+    rviz_config_file = LaunchConfiguration('rviz_config_file')
+    use_sim_time = LaunchConfiguration('use_sim_time')
+    use_rviz = LaunchConfiguration('use_rviz')
+    world = LaunchConfiguration('world')
+
+    # Generate robot description
+    robot_description_content = ParameterValue(
+        Command(['xacro ', model_path]),
+        value_type=str
+    )
+
+    # Robot State Publisher Node
+    robot_state_publisher_node = Node(
+        package='robot_state_publisher',
+        executable='robot_state_publisher',
+        name='robot_state_publisher',
+        output='screen',
+        parameters=[{
+            'use_sim_time': use_sim_time,
+            'robot_description': robot_description_content
+        }]
+    )
+
+    # Joint State Publisher Node
+    joint_state_publisher_node = Node(
+        package='joint_state_publisher',
+        executable='joint_state_publisher',
+        name='joint_state_publisher',
+        output='screen',
+        parameters=[{'use_sim_time': use_sim_time}]
+    )
+
+    # Gazebo Launch
+    gazebo_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource([
+            PathJoinSubstitution([
+                FindPackageShare('gazebo_ros'),
+                'launch',
+                'gazebo.launch.py'
+            ])
+        ]),
+        launch_arguments={
+            'world': world,
+            'verbose': 'true'
+        }.items()
+    )
+
+    # Spawn Entity Node
+    spawn_entity_node = Node(
+        package='gazebo_ros',
+        executable='spawn_entity.py',
+        name='spawn_entity',
+        output='screen',
+        arguments=[
+            '-entity', 'mentorpi',
+            '-topic', 'robot_description',
+            '-x', '0.0',
+            '-y', '0.0',
+            '-z', '0.1'
+        ],
+        parameters=[{'use_sim_time': use_sim_time}]
+    )
+
+    # RVIZ Node
+    rviz_node = Node(
+        condition=IfCondition(use_rviz),
+        package='rviz2',
+        executable='rviz2',
+        name='rviz2',
+        output='screen',
+        arguments=['-d', rviz_config_file],
+        parameters=[{'use_sim_time': use_sim_time}]
+    )
+
+    # Return LaunchDescription
+    return LaunchDescription([
+        declare_model_path_cmd,
+        declare_rviz_config_file_cmd,
+        declare_use_sim_time_cmd,
+        declare_use_rviz_cmd,
+        declare_world_cmd,
+        
+        robot_state_publisher_node,
+        joint_state_publisher_node,
+        gazebo_launch,
+        spawn_entity_node,
+        rviz_node
+    ])
